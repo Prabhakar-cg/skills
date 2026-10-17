@@ -8,20 +8,70 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  validate:
-    name: Validate SKILL.md structure
+  discover:
+    name: Discover skills
     runs-on: ubuntu-latest
+    outputs:
+      skills: ${{ steps.list.outputs.skills }}
+      has_skills: ${{ steps.list.outputs.has_skills }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
         run: pip install pyyaml
 
-      - name: Validate every skill against the Agent Skills spec
+      - name: List skill directories
+        id: list
+        run: |
+          skills=$(python scripts/validate_skills.py --list)
+          echo "Skills: $skills"
+          echo "skills=$skills" >> "$GITHUB_OUTPUT"
+          if [ "$skills" = "[]" ]; then
+            echo "has_skills=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_skills=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  validate-skill:
+    name: Validate ${{ matrix.skill }}
+    needs: discover
+    if: needs.discover.outputs.has_skills == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: ${{ fromJSON(needs.discover.outputs.skills) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Validate ${{ matrix.skill }} against the Agent Skills spec
+        run: python scripts/validate_skills.py "${{ matrix.skill }}"
+
+  validate-repo:
+    name: Validate all skills together
+    needs: discover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      # Catches cross-skill problems such as duplicate skill names.
+      - name: Validate every skill and cross-skill uniqueness
         run: python scripts/validate_skills.py
