@@ -59,7 +59,7 @@ jobs:
         run: python scripts/validate_skills.py "${{ matrix.skill }}"
 
   validate-repo:
-    name: Validate all skills together
+    name: Validate SKILL.md structure
     needs: discover
     runs-on: ubuntu-latest
     steps:
