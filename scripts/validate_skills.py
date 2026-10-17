@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Validate every Skill in this repo against Anthropic's Agent Skills spec.
+"""Validate every Skill in this repo against the Agent Skills spec.
+
+Spec: https://agentskills.io/specification
 
 A "Skill" is any directory containing a SKILL.md file. This script finds all
 of them and checks:
 
   - YAML frontmatter exists and parses
   - required fields `name` and `description` are present and well-formed
-    (per https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
+    (`name` must match the directory name)
+  - optional fields `license`, `compatibility`, `metadata`, `allowed-tools`
+    have the right types and lengths; unknown fields are warned about
   - `name` is unique across the repo
   - files the SKILL.md body references (markdown links or inline code paths
     under scripts/, references/, assets/) actually exist
@@ -34,12 +38,12 @@ SKIP_DIR_NAMES = {".git", ".github", "node_modules"}
 
 MAX_NAME_LEN = 64
 MAX_DESC_LEN = 1024
+MAX_COMPAT_LEN = 500
+KNOWN_FIELDS = {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
 MAX_BODY_LINES = 500
 MAX_REFERENCE_LINES_WITHOUT_TOC = 100
 
-NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
-RESERVED_WORDS = ("anthropic", "claude")
-XML_TAG_PATTERN = re.compile(r"</?[a-zA-Z][^>]*>")
+NAME_PATTERN = re.compile(r"^[^\W_A-Z]+(?:-[^\W_A-Z]+)*$")  # unicode lowercase alphanumerics, single hyphens, no leading/trailing hyphen
 
 MARKDOWN_LINK_PATTERN = re.compile(r"\]\(([^)\s]+)\)")
 BACKTICK_PATTERN = re.compile(r"`([^`\n]+)`")
@@ -105,27 +109,41 @@ def validate_name(name: object, rel: str, dir_name: str, issues: list[Issue]) ->
     name = str(name)
     if len(name) > MAX_NAME_LEN:
         issues.append(Issue("error", rel, f"name exceeds {MAX_NAME_LEN} characters ({len(name)})"))
-    if not NAME_PATTERN.match(name):
-        issues.append(Issue("error", rel, f"name '{name}' must contain only lowercase letters, numbers, and hyphens"))
-    if XML_TAG_PATTERN.search(name):
-        issues.append(Issue("error", rel, "name must not contain XML tags"))
-    lowered = name.lower()
-    for word in RESERVED_WORDS:
-        if word in lowered:
-            issues.append(Issue("error", rel, f"name must not contain reserved word '{word}'"))
+    if name != name.lower() or not NAME_PATTERN.match(name):
+        issues.append(Issue(
+            "error", rel,
+            f"name '{name}' must use only lowercase letters, numbers, and single hyphens, "
+            f"and must not start or end with a hyphen",
+        ))
     if name != dir_name:
-        issues.append(Issue("warning", rel, f"frontmatter name '{name}' does not match directory name '{dir_name}'"))
+        issues.append(Issue("error", rel, f"frontmatter name '{name}' must match directory name '{dir_name}'"))
 
 
 def validate_description(description: object, rel: str, issues: list[Issue]) -> None:
     if description is None or not str(description).strip():
         issues.append(Issue("error", rel, "frontmatter missing required non-empty field 'description'"))
         return
-    description = str(description)
-    if len(description) > MAX_DESC_LEN:
-        issues.append(Issue("error", rel, f"description exceeds {MAX_DESC_LEN} characters ({len(description)})"))
-    if XML_TAG_PATTERN.search(description):
-        issues.append(Issue("error", rel, "description must not contain XML tags"))
+    if len(str(description)) > MAX_DESC_LEN:
+        issues.append(Issue("error", rel, f"description exceeds {MAX_DESC_LEN} characters ({len(str(description))})"))
+
+
+def validate_optional_fields(frontmatter: dict, rel: str, issues: list[Issue]) -> None:
+    for field in sorted(set(frontmatter) - KNOWN_FIELDS):
+        issues.append(Issue("warning", rel, f"unknown frontmatter field '{field}' (move custom keys under 'metadata')"))
+
+    for field in ("license", "allowed-tools"):
+        if field in frontmatter and not (isinstance(frontmatter[field], str) and frontmatter[field].strip()):
+            issues.append(Issue("error", rel, f"'{field}' must be a non-empty string"))
+
+    if "compatibility" in frontmatter:
+        compat = frontmatter["compatibility"]
+        if not (isinstance(compat, str) and 1 <= len(compat) <= MAX_COMPAT_LEN):
+            issues.append(Issue("error", rel, f"'compatibility' must be a string of 1-{MAX_COMPAT_LEN} characters"))
+
+    if "metadata" in frontmatter:
+        meta = frontmatter["metadata"]
+        if not (isinstance(meta, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in meta.items())):
+            issues.append(Issue("error", rel, "'metadata' must be a mapping of string keys to string values"))
 
 
 def check_reference_tocs(skill_dir: Path, rel: str, issues: list[Issue]) -> None:
@@ -168,6 +186,7 @@ def validate_skill(skill_dir: Path, root: Path) -> list[Issue]:
 
     validate_name(frontmatter.get("name"), rel, skill_dir.name, issues)
     validate_description(frontmatter.get("description"), rel, issues)
+    validate_optional_fields(frontmatter, rel, issues)
 
     body_lines = body.strip("\n").splitlines()
     if len(body_lines) > MAX_BODY_LINES:
