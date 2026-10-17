@@ -16,6 +16,8 @@ of them and checks:
 """
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -184,7 +186,22 @@ def validate_skill(skill_dir: Path, root: Path) -> list[Issue]:
 
 
 def main() -> int:
-    skill_dirs = list(find_skills(REPO_ROOT))
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("skills", nargs="*", help="skill directories to validate (default: all)")
+    parser.add_argument("--list", action="store_true", help="print skill directories as a JSON array and exit")
+    args = parser.parse_args()
+
+    all_skill_dirs = list(find_skills(REPO_ROOT))
+    if args.list:
+        print(json.dumps([str(d.relative_to(REPO_ROOT)) for d in all_skill_dirs]))
+        return 0
+
+    skill_dirs = [(REPO_ROOT / s).resolve() for s in args.skills] if args.skills else all_skill_dirs
+    missing = [d for d in skill_dirs if not (d / "SKILL.md").is_file()]
+    if missing:
+        for d in missing:
+            print(f"[ERROR] {d.relative_to(REPO_ROOT)}: no SKILL.md found", file=sys.stderr)
+        return 1
 
     if not skill_dirs:
         print("No SKILL.md files found in this repo — nothing to validate.")
